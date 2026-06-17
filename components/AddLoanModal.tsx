@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import CurrencyInput from "@/components/CurrencyInput";
+import { reverseCalcRate } from "@/lib/calculations";
 import type { LoanType, NewLoanPayload } from "@/types";
 
 interface Props {
@@ -34,6 +35,9 @@ const EMPTY_FORM = (type: LoanType): NewLoanPayload => ({
   annual_interest_rate: DEFAULT_RATES[type],
   current_principal_remaining: 0,
   opening_accrued_interest: 0,
+  monthly_emi: 0,
+  loan_tenure_months: 0,
+  property_collateral: "",
 });
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
@@ -45,6 +49,10 @@ export default function AddLoanModal({ defaultType = "GOLD_PAWN", onClose, onAdd
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  // Auto-calc rate helper state (not persisted to DB)
+  const [autoAccrued, setAutoAccrued] = useState<number>(0);
+  const [autoDays,    setAutoDays]    = useState<number>(0);
+
   function setText(e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) {
     setForm((p) => ({ ...p, [e.target.name]: e.target.value }));
   }
@@ -55,6 +63,24 @@ export default function AddLoanModal({ defaultType = "GOLD_PAWN", onClose, onAdd
 
   function handleTypeChange(type: LoanType) {
     setForm((p) => ({ ...p, loan_type: type, annual_interest_rate: DEFAULT_RATES[type] }));
+  }
+
+  // Auto-calculate rate: updates form.annual_interest_rate reactively
+  function handleAutoAccruedChange(v: number) {
+    setAutoAccrued(v);
+    const rate = reverseCalcRate(v, form.current_principal_remaining, autoDays);
+    if (rate !== null) {
+      setForm((p) => ({ ...p, annual_interest_rate: parseFloat(rate.toFixed(4)) }));
+    }
+  }
+
+  function handleAutoDaysChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const d = parseInt(e.target.value) || 0;
+    setAutoDays(d);
+    const rate = reverseCalcRate(autoAccrued, form.current_principal_remaining, d);
+    if (rate !== null) {
+      setForm((p) => ({ ...p, annual_interest_rate: parseFloat(rate.toFixed(4)) }));
+    }
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -71,6 +97,8 @@ export default function AddLoanModal({ defaultType = "GOLD_PAWN", onClose, onAdd
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) { setError("Not authenticated."); setLoading(false); return; }
 
+    const isHousing = form.loan_type === "HOUSING";
+
     const { error: dbError } = await supabase.from("loans").insert({
       user_id:                        user.id,
       bank_name:                      form.bank_name.trim(),
@@ -85,6 +113,10 @@ export default function AddLoanModal({ defaultType = "GOLD_PAWN", onClose, onAdd
       annual_interest_rate:           form.annual_interest_rate,
       current_principal_remaining:    form.current_principal_remaining,
       total_historical_interest_paid: form.opening_accrued_interest,
+      // Housing-specific (only insert when relevant, null otherwise)
+      monthly_emi:          isHousing && form.monthly_emi ? form.monthly_emi : null,
+      loan_tenure_months:   isHousing && form.loan_tenure_months ? form.loan_tenure_months : null,
+      property_collateral:  isHousing && form.property_collateral?.trim() ? form.property_collateral.trim() : null,
     });
 
     if (dbError) { setError(dbError.message); setLoading(false); return; }
@@ -92,8 +124,10 @@ export default function AddLoanModal({ defaultType = "GOLD_PAWN", onClose, onAdd
     onClose();
   }
 
+  const isHousing = form.loan_type === "HOUSING";
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center px-4 bg-black/50 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-4 bg-black/50 backdrop-blur-sm overflow-y-auto py-8">
       <div className="modal-panel max-w-md w-full">
         <button
           onClick={onClose}
@@ -142,7 +176,7 @@ export default function AddLoanModal({ defaultType = "GOLD_PAWN", onClose, onAdd
                 Branch
               </label>
               <input name="branch" value={form.branch} onChange={setText}
-                     className="input-field" placeholder="e.g. Colombo 03" />
+                     className="input-field" placeholder="e.g. Yakkala" />
             </div>
           </div>
 
@@ -163,7 +197,7 @@ export default function AddLoanModal({ defaultType = "GOLD_PAWN", onClose, onAdd
                 Original Loan Value
               </label>
               <CurrencyInput value={form.initial_amount} onChange={setNum("initial_amount")}
-                             className="input-field" placeholder="e.g. 1,300,000" required />
+                             className="input-field" placeholder="e.g. 4,300,000" required />
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
@@ -171,28 +205,79 @@ export default function AddLoanModal({ defaultType = "GOLD_PAWN", onClose, onAdd
               </label>
               <CurrencyInput value={form.current_principal_remaining}
                              onChange={setNum("current_principal_remaining")}
-                             className="input-field" placeholder="e.g. 1,136,805" required />
+                             className="input-field" placeholder="e.g. 3,932,059" required />
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
-                Annual Interest Rate (%)
-              </label>
-              <input type="number" name="annual_interest_rate" required min={0.01} step={0.01}
-                     value={form.annual_interest_rate} className="input-field" placeholder="e.g. 14.84"
-                     onChange={(e) => setForm((p) => ({ ...p, annual_interest_rate: parseFloat(e.target.value) || 0 }))} />
+          {/* ── Annual Interest Rate + Auto-Calc helper ── */}
+          <div>
+            <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
+              Annual Interest Rate (%)
+            </label>
+            <input
+              type="number"
+              name="annual_interest_rate"
+              required
+              min={0.01}
+              step={0.0001}
+              value={form.annual_interest_rate}
+              className="input-field"
+              placeholder="e.g. 15"
+              onChange={(e) => setForm((p) => ({ ...p, annual_interest_rate: parseFloat(e.target.value) || 0 }))}
+            />
+          </div>
+
+          {/* AUTO-CALCULATE RATE FROM BANK DATA */}
+          <div className="bg-teal-50 dark:bg-teal-900/20 border border-teal-200 dark:border-teal-800 rounded-xl p-3 space-y-2">
+            <p className="text-xs font-bold text-teal-700 dark:text-teal-300 uppercase tracking-widest">
+              🔄 Auto-Calculate Rate From Bank Data
+            </p>
+            <p className="text-xs text-teal-600 dark:text-teal-400">
+              Enter values from your bank statement to reverse-engineer the exact rate.
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
+                  Accrued interest (Rs.)
+                </label>
+                <CurrencyInput
+                  value={autoAccrued}
+                  onChange={handleAutoAccruedChange}
+                  className="input-field"
+                  placeholder="e.g. 7,412"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
+                  Days since last payment
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={autoDays || ""}
+                  onChange={handleAutoDaysChange}
+                  className="input-field"
+                  placeholder="e.g. 18"
+                />
+              </div>
             </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
-                Accrued Interest{" "}
-                <span className="text-gray-400 font-normal">(optional)</span>
-              </label>
-              <CurrencyInput value={form.opening_accrued_interest}
-                             onChange={setNum("opening_accrued_interest")}
-                             className="input-field" placeholder="e.g. 7,412" />
-            </div>
+            {autoAccrued > 0 && autoDays > 0 && form.current_principal_remaining > 0 && (
+              <p className="text-xs text-teal-600 dark:text-teal-400">
+                ✓ Rate auto-set to <strong>{form.annual_interest_rate.toFixed(4)}%</strong>
+              </p>
+            )}
+          </div>
+
+          {/* ── Accrued Interest at entry ── */}
+          <div>
+            <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
+              Accrued Interest at Entry{" "}
+              <span className="text-gray-400 font-normal">(optional — interest already accrued before this date)</span>
+            </label>
+            <CurrencyInput value={form.opening_accrued_interest}
+                           onChange={setNum("opening_accrued_interest")}
+                           className="input-field" placeholder="e.g. 0" />
           </div>
 
           {/* ── Dates ── */}
@@ -216,6 +301,54 @@ export default function AddLoanModal({ defaultType = "GOLD_PAWN", onClose, onAdd
               <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">Blank = use start date</p>
             </div>
           </div>
+
+          {/* ── Housing-only fields ── */}
+          {isHousing && (
+            <>
+              <SectionLabel>Home Loan Details</SectionLabel>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
+                    Monthly EMI (Rs.)
+                  </label>
+                  <CurrencyInput
+                    value={form.monthly_emi ?? 0}
+                    onChange={setNum("monthly_emi")}
+                    className="input-field"
+                    placeholder="e.g. 82,583"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
+                    Loan Tenure (months)
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={form.loan_tenure_months || ""}
+                    onChange={(e) => setForm((p) => ({ ...p, loan_tenure_months: parseInt(e.target.value) || 0 }))}
+                    className="input-field"
+                    placeholder="e.g. 84 (7 yrs), 120 (10 yrs)"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">
+                  Property / Collateral
+                </label>
+                <input
+                  name="property_collateral"
+                  value={form.property_collateral ?? ""}
+                  onChange={setText}
+                  className="input-field"
+                  placeholder="e.g. Veyangoda, No. 12 Main Street"
+                />
+              </div>
+            </>
+          )}
 
           {error && (
             <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-700

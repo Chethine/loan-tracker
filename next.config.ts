@@ -6,9 +6,6 @@ const nextConfig: NextConfig = {
     // Type checking is done locally — skip during Vercel build
     ignoreBuildErrors: true,
   },
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
 };
 
 export default nextConfig;

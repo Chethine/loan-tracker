@@ -14,6 +14,11 @@ export interface Loan {
   current_principal_remaining: number;
   total_historical_interest_paid: number;
   created_at: string;
+
+  // Housing-loan-specific (nullable for GOLD_PAWN)
+  monthly_emi?: number | null;          // fixed monthly EMI amount
+  loan_tenure_months?: number | null;   // total tenure in months (e.g. 84, 120, 240)
+  property_collateral?: string | null;  // property description / collateral location
 }
 
 export interface NewLoanPayload {
@@ -27,6 +32,11 @@ export interface NewLoanPayload {
   annual_interest_rate: number;
   current_principal_remaining: number;
   opening_accrued_interest: number; // interest already accrued at time of entry
+
+  // Housing-loan-specific
+  monthly_emi?: number;
+  loan_tenure_months?: number;
+  property_collateral?: string;
 }
 
 export interface PaymentResult {
@@ -34,6 +44,13 @@ export interface PaymentResult {
   principal_reduction: number;
   new_principal: number;
   new_total_interest_paid: number;
+}
+
+export interface EmiBreakdown {
+  dailyInterest: number;
+  interestPortion: number;   // daily * 30.4167
+  principalPortion: number;  // emi - interestPortion
+  tenureLeftMonths: number;  // months remaining on loan
 }
 
 export interface CategoryStats {

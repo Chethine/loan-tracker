@@ -1,5 +1,5 @@
-import { differenceInDays } from "date-fns";
-import type { PaymentResult } from "@/types";
+import { differenceInDays, differenceInMonths } from "date-fns";
+import type { PaymentResult, EmiBreakdown } from "@/types";
 
 /**
  * Calculate interest accrued from `lastPaymentDate` to today.
@@ -73,12 +73,82 @@ export function dailyCost(
 }
 
 /**
+ * Monthly EMI breakdown for a housing loan.
+ *
+ * - dailyInterest      = principal × (rate/100) / 365
+ * - interestPortion    = dailyInterest × 30.4167   (average days per month)
+ * - principalPortion   = monthlyEmi − interestPortion
+ * - tenureLeftMonths   = tenureMonths − monthsElapsed(startDate → today)  (min 0)
+ */
+export function calcEmiBreakdown(
+  principal: number,
+  annualRatePercent: number,
+  monthlyEmi: number,
+  startDate: Date | string,
+  tenureMonths: number
+): EmiBreakdown {
+  const daily = dailyCost(principal, annualRatePercent);
+  const interestPortion = daily * 30.4167;
+  const principalPortion = Math.max(monthlyEmi - interestPortion, 0);
+
+  const monthsElapsed = Math.max(
+    differenceInMonths(new Date(), new Date(startDate)),
+    0
+  );
+  const tenureLeftMonths = Math.max(tenureMonths - monthsElapsed, 0);
+
+  return { dailyInterest: daily, interestPortion, principalPortion, tenureLeftMonths };
+}
+
+/**
+ * Reverse-engineer annual interest rate from accrued interest and days elapsed.
+ *
+ * Formula: rate = (accruedInterest / (principal × (days / 365))) × 100
+ *
+ * Returns null when inputs are invalid (zero principal or zero days).
+ */
+export function reverseCalcRate(
+  accruedInterest: number,
+  principal: number,
+  days: number
+): number | null {
+  if (principal <= 0 || days <= 0 || accruedInterest <= 0) return null;
+  return (accruedInterest / (principal * (days / 365))) * 100;
+}
+
+/**
+ * Interest-as-%-of-original-loan ratio.
+ * Returns a value like 0.9 (meaning 0.9%).
+ */
+export function calcInterestRatio(
+  totalInterestSoFar: number,
+  originalLoanValue: number
+): number {
+  if (originalLoanValue <= 0) return 0;
+  return (totalInterestSoFar / originalLoanValue) * 100;
+}
+
+/**
  * Format a number as LKR currency — always two decimal places, no abbreviations.
  * e.g. 150000 → "LKR 150,000.00"
  */
 export function formatLKR(amount: number): string {
   return (
     "LKR " +
+    amount.toLocaleString("en-US", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })
+  );
+}
+
+/**
+ * Format a number with Rs. prefix — used in housing-loan EMI panels.
+ * e.g. 82583 → "Rs. 82,583.00"
+ */
+export function formatRs(amount: number): string {
+  return (
+    "Rs. " +
     amount.toLocaleString("en-US", {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
