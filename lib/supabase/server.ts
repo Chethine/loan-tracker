@@ -1,10 +1,7 @@
-import { createServerClient, type CookieMethodsServer } from "@supabase/ssr";
+import { createServerClient } from "@supabase/ssr";
+import { type CookieMethodsServer } from "@supabase/ssr";
 import { cookies } from "next/headers";
 
-/**
- * Server-side Supabase client.
- * Use in Server Components, Route Handlers, and Server Actions.
- */
 export async function createClient() {
   const cookieStore = await cookies();
 
@@ -22,7 +19,7 @@ export async function createClient() {
               cookieStore.set(name, value, options)
             );
           } catch {
-            // setAll called from a Server Component — ignored.
+            // Called from a Server Component — safe to ignore.
           }
         },
       },
